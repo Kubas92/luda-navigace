@@ -64,6 +64,11 @@
   .arrived .msg{font-size:1.15rem; margin-top:8px; font-weight:600;}
   .iconbtn{width:auto; padding:10px 14px; border-radius:50%; background:#eee2c4; color:var(--ink); font-size:1.2rem;}
   .controls{display:flex; gap:10px; margin-top:14px; width:100%;}
+  @keyframes pulseFlash{
+    0%{box-shadow:0 0 0 0 rgba(176,137,0,.6);}
+    100%{box-shadow:0 0 0 28px rgba(176,137,0,0);}
+  }
+  .compass-ring.pulse{animation:pulseFlash .45s ease-out;}
 </style>
 </head>
 <body>
@@ -296,6 +301,7 @@ function startTrackingUI(target, compassOk){
         <button id="muteBtn" class="iconbtn">🔊</button>
         <button id="stopBtn" class="secondary">⏹️ Zastavit</button>
       </div>
+      <p class="note">Nepípá to? Na iPhonu zvuk z webu ztlumí přepínač Zvonění/Ztlumeno na boku telefonu. Kroužek kolem šipky ale bliká stejným rytmem jako mělo pípat.</p>
     </div>
     <div id="arrivedArea"></div>
   `;
@@ -372,18 +378,30 @@ function beep(freq, duration, volume){
   osc.stop(audioCtx.currentTime + duration/1000 + 0.03);
 }
 
+function flashPulse(){
+  // Vizuální náhrada za pípání - funguje i na iPhonu, kde web nemůže
+  // přehrát zvuk přes fyzický přepínač Zvonění/Ztlumeno.
+  const ring = document.querySelector('.compass-ring');
+  if (!ring) return;
+  ring.classList.remove('pulse');
+  void ring.offsetWidth;
+  ring.classList.add('pulse');
+}
+
 function scheduleBeep(){
   clearTimeout(beepTimer);
   if (latestDistance == null) { beepTimer = setTimeout(scheduleBeep, 400); return; }
   const arriveThreshold = Math.max(latestAccuracy || 8, 3);
   if (latestDistance <= arriveThreshold){
     beep(1900, 220, 0.28);
+    flashPulse();
     beepTimer = setTimeout(scheduleBeep, 260);
     return;
   }
   const interval = Math.min(1400, Math.max(130, latestDistance * 8));
   const freq = Math.min(1700, Math.max(500, 1700 - latestDistance * 5));
   beep(freq, 150, 0.25);
+  flashPulse();
   beepTimer = setTimeout(scheduleBeep, interval);
 }
 
