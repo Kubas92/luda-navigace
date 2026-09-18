@@ -99,6 +99,16 @@ function bearingDeg(lat1, lon1, lat2, lon2){
 // odkaz nešel rozlousknout vložením do běžné base64 dekodérky.
 const TREASURE_KEY = 'poklad-je-schovany-2026';
 
+// Namluvené hlášky - stačí přidat soubory (.m4a/.mp3) do složky voices/
+// a jejich cestu sem do pole. Prázdné pole = funkce se nezapne, nic se nerozbije.
+const VOICE_GENERAL = [
+  // 'voices/pohni.m4a',
+  // 'voices/hledej.m4a',
+];
+const VOICE_ARRIVED = [
+  // 'voices/nasels.m4a',
+];
+
 function encodeTreasure(data){
   const bytes = new TextEncoder().encode(JSON.stringify(data));
   let binary = '';
@@ -257,6 +267,7 @@ function renderSeeker(target){
 
     ensureAudioContext(); // musí běžet synchronně hned v handleru kliknutí,
     // jinak prohlížeč (hlavně Safari/iOS) po "await" už gesto neuzná a zvuk se neuvolní
+    primeVoiceAudio();
     const compassOk = await requestSensorPermission();
     requestWakeLock();
     startTrackingUI(target, compassOk);
@@ -266,6 +277,7 @@ function renderSeeker(target){
       err => onGeoError(err),
       {enableHighAccuracy:true, maximumAge:1000, timeout:20000}
     );
+    scheduleVoice();
   });
 }
 
@@ -284,6 +296,8 @@ let muted = false;
 let audioCtx = null;
 let wakeLockRef = null;
 let arrivedShown = false;
+let voiceEl = null;
+let voiceTimer = null;
 
 function startTrackingUI(target, compassOk){
   const app = document.getElementById('app');
@@ -317,6 +331,7 @@ function startTrackingUI(target, compassOk){
 
 function stopHunt(){
   clearTimeout(beepTimer);
+  clearTimeout(voiceTimer);
   if (wakeLockRef) wakeLockRef.release().catch(()=>{});
   location.reload();
 }
@@ -404,6 +419,38 @@ function scheduleBeep(){
   beepTimer = setTimeout(scheduleBeep, interval);
 }
 
+function primeVoiceAudio(){
+  // Stejný trik jako u AudioContextu - přehrát/pauznout musí proběhnout
+  // synchronně v gestu kliknutí, jinak iOS pozdější přehrání programově zablokuje.
+  const first = VOICE_GENERAL[0] || VOICE_ARRIVED[0];
+  if (!first) return;
+  voiceEl = new Audio(first);
+  voiceEl.volume = 0;
+  voiceEl.play().then(() => {
+    voiceEl.pause();
+    voiceEl.currentTime = 0;
+    voiceEl.volume = 1;
+  }).catch(() => {});
+}
+
+function playRandomVoice(list){
+  if (!list.length || muted || !voiceEl) return;
+  voiceEl.pause();
+  voiceEl.src = list[Math.floor(Math.random() * list.length)];
+  voiceEl.currentTime = 0;
+  voiceEl.play().catch(() => {});
+}
+
+function scheduleVoice(){
+  clearTimeout(voiceTimer);
+  if (!VOICE_GENERAL.length || arrivedShown) return;
+  const delay = 7000 + Math.random() * 8000; // 7-15 s, ať to nekřičí pořád
+  voiceTimer = setTimeout(() => {
+    playRandomVoice(VOICE_GENERAL);
+    scheduleVoice();
+  }, delay);
+}
+
 function requestWakeLock(){
   if ('wakeLock' in navigator){
     navigator.wakeLock.request('screen').then(w => wakeLockRef = w).catch(()=>{});
@@ -483,6 +530,8 @@ function showArrived(target){
   if (arrivedShown) return;
   arrivedShown = true;
   clearTimeout(beepTimer);
+  clearTimeout(voiceTimer);
+  playRandomVoice(VOICE_ARRIVED);
   beep(2100, 150, 0.28);
   setTimeout(() => beep(2100, 150, 0.28), 220);
   setTimeout(() => beep(2500, 250, 0.28), 440);
