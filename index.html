@@ -1,0 +1,462 @@
+<!DOCTYPE html>
+<html lang="cs">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#1b4332">
+<title>Hon za pokladem</title>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>%F0%9F%92%B0</text></svg>">
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css">
+<style>
+  :root{
+    --bg:#f4ecd8; --card:#fffdf7; --ink:#1b2b22; --muted:#6b6153;
+    --accent:#1b4332; --accent2:#b08900; --danger:#a4342a; --good:#2d6a4f;
+    --radius:18px;
+  }
+  *{box-sizing:border-box; -webkit-tap-highlight-color:transparent;}
+  html,body{height:100%;}
+  body{
+    margin:0; background:var(--bg); color:var(--ink);
+    font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;
+    padding:env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left);
+    min-height:100dvh;
+  }
+  #app{max-width:480px; margin:0 auto; padding:16px; min-height:100dvh; display:flex; flex-direction:column;}
+  h1{font-size:1.4rem; margin:.2em 0 .1em; text-align:center;}
+  p.lead{color:var(--muted); text-align:center; margin-top:0; font-size:.95rem;}
+  .card{background:var(--card); border-radius:var(--radius); padding:18px; box-shadow:0 2px 10px rgba(0,0,0,.08); margin-bottom:14px;}
+  button{
+    font:inherit; font-weight:600; border:none; border-radius:14px; padding:14px 18px;
+    background:var(--accent); color:#fff; width:100%; cursor:pointer; font-size:1.05rem;
+    display:flex; align-items:center; justify-content:center; gap:8px;
+  }
+  button:active{transform:scale(.98);}
+  button.secondary{background:transparent; color:var(--accent); border:2px solid var(--accent);}
+  button.gold{background:var(--accent2);}
+  button:disabled{opacity:.5;}
+  input[type=text]{
+    width:100%; padding:12px 14px; border-radius:12px; border:1.5px solid #ddd3ba;
+    font-size:1rem; font-family:inherit; background:#fff;
+  }
+  label{display:block; font-size:.85rem; color:var(--muted); margin:10px 0 4px;}
+  .row{display:flex; gap:10px;}
+  .row > *{flex:1;}
+  #map{height:280px; border-radius:14px; margin:10px 0; overflow:hidden;}
+  .error{background:#fdecea; color:var(--danger); padding:12px 14px; border-radius:12px; font-size:.92rem;}
+  .note{background:#fff7e0; color:#6b5300; padding:10px 14px; border-radius:12px; font-size:.85rem; margin-top:8px;}
+  .linkbox{display:flex; gap:8px; margin-top:10px;}
+  .linkbox input{flex:1; font-size:.82rem;}
+  #qrbox{display:flex; justify-content:center; margin-top:14px;}
+  #qrbox img, #qrbox canvas{border-radius:12px; background:#fff; padding:8px;}
+  footer{text-align:center; color:var(--muted); font-size:.75rem; margin-top:auto; padding-top:20px;}
+
+  /* seeker view */
+  .hunt{flex:1; display:flex; flex-direction:column; align-items:center; justify-content:center; text-align:center;}
+  .compass-wrap{position:relative; width:230px; height:230px; margin:10px auto 4px;}
+  .compass-ring{position:absolute; inset:0; border-radius:50%; background:radial-gradient(circle at 50% 45%, #fff, #eee0c0); box-shadow:inset 0 0 0 6px #fff, 0 4px 16px rgba(0,0,0,.12);}
+  .arrow{position:absolute; inset:0; transition:transform .18s ease-out; will-change:transform;}
+  .arrow svg{width:100%; height:100%;}
+  .distance{font-size:2.6rem; font-weight:800; margin:6px 0 0;}
+  .distance span{font-size:1.1rem; font-weight:600; color:var(--muted);}
+  .status-text{font-size:1.3rem; font-weight:700; margin:2px 0 6px;}
+  .acc-text{color:var(--muted); font-size:.85rem; margin-bottom:10px;}
+  .arrived{background:linear-gradient(180deg,#fff7d6,#fff); border:2px solid var(--accent2);}
+  .arrived .msg{font-size:1.15rem; margin-top:8px; font-weight:600;}
+  .iconbtn{width:auto; padding:10px 14px; border-radius:50%; background:#eee2c4; color:var(--ink); font-size:1.2rem;}
+  .controls{display:flex; gap:10px; margin-top:14px; width:100%;}
+</style>
+</head>
+<body>
+<div id="app"></div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
+<script>
+"use strict";
+
+// ---------- helpers ----------
+const toRad = d => d * Math.PI / 180;
+const toDeg = r => r * 180 / Math.PI;
+
+function distanceMeters(lat1, lon1, lat2, lon2){
+  const R = 6371000;
+  const dLat = toRad(lat2 - lat1), dLon = toRad(lon2 - lon1);
+  const a = Math.sin(dLat/2)**2 + Math.cos(toRad(lat1))*Math.cos(toRad(lat2))*Math.sin(dLon/2)**2;
+  return 2 * R * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
+}
+function bearingDeg(lat1, lon1, lat2, lon2){
+  const y = Math.sin(toRad(lon2-lon1)) * Math.cos(toRad(lat2));
+  const x = Math.cos(toRad(lat1))*Math.sin(toRad(lat2)) - Math.sin(toRad(lat1))*Math.cos(toRad(lat2))*Math.cos(toRad(lon2-lon1));
+  return (toDeg(Math.atan2(y, x)) + 360) % 360;
+}
+function b64EncodeUnicode(str){
+  return btoa(encodeURIComponent(str).replace(/%([0-9A-F]{2})/g, (_, p1) => String.fromCharCode('0x' + p1)));
+}
+function b64DecodeUnicode(str){
+  return decodeURIComponent(atob(str).split('').map(c => '%' + ('00' + c.charCodeAt(0).toString(16)).slice(-2)).join(''));
+}
+
+const arrowSvg = `<svg viewBox="0 0 100 100"><polygon points="50,10 68,58 50,46 32,58" fill="#a4342a"/><polygon points="50,46 68,58 50,92 32,58" fill="#1b4332"/><circle cx="50" cy="50" r="45" fill="none" stroke="#ddd3ba" stroke-width="2"/></svg>`;
+
+// ---------- routing ----------
+const params = new URLSearchParams(location.search);
+const t = params.get('t');
+if (t) {
+  try { renderSeeker(JSON.parse(b64DecodeUnicode(t))); }
+  catch(e){ renderBadLink(); }
+} else {
+  renderSetter();
+}
+
+function renderBadLink(){
+  document.getElementById('app').innerHTML = `
+    <h1>😕 Odkaz nefunguje</h1>
+    <div class="card error">Odkaz na poklad je poškozený nebo neúplný. Zkontroluj, jestli jsi zkopíroval(a) celou adresu.</div>`;
+}
+
+// ================= SETTER (pro tebe) =================
+function renderSetter(){
+  const app = document.getElementById('app');
+  app.innerHTML = `
+    <h1>🗺️ Schovej poklad</h1>
+    <p class="lead">Stoupni si přesně na místo, kam poklad schováváš, a stiskni tlačítko.</p>
+    <div class="card">
+      <button id="locBtn">📍 Použij moji polohu</button>
+      <div id="setterMsgs"></div>
+      <div id="mapArea" style="display:none">
+        <div id="map"></div>
+        <p class="note">Značku můžeš přetáhnout, pokud GPS trefila místo nepřesně. Kroužek ukazuje odhadovanou přesnost GPS.</p>
+        <label for="msgInput">Vzkaz pro hledače (zobrazí se, až poklad najde) – nepovinné</label>
+        <input type="text" id="msgInput" placeholder="Např. Je pod velkým kamenem u lavičky!">
+        <label for="titleInput">Název pokladu – nepovinné</label>
+        <input type="text" id="titleInput" placeholder="Např. Poklad pro Lukáše">
+        <button id="genBtn" class="gold" style="margin-top:14px">🔗 Vytvořit odkaz</button>
+      </div>
+    </div>
+    <div id="resultArea"></div>
+    <footer>GPS venku na otevřeném prostranství bývá přesná na cca 3–15 m, ne na centimetry.</footer>
+  `;
+
+  const locBtn = document.getElementById('locBtn');
+  const msgs = document.getElementById('setterMsgs');
+  let marker, circle, map, current;
+
+  locBtn.addEventListener('click', () => {
+    if (!('geolocation' in navigator)){
+      msgs.innerHTML = `<div class="error">Tento prohlížeč neumí zjistit polohu.</div>`;
+      return;
+    }
+    locBtn.disabled = true;
+    msgs.innerHTML = `<p class="note">Zjišťuji polohu…</p>`;
+    navigator.geolocation.getCurrentPosition(pos => {
+      locBtn.disabled = false;
+      msgs.innerHTML = '';
+      current = {lat: pos.coords.latitude, lon: pos.coords.longitude, acc: pos.coords.accuracy};
+      document.getElementById('mapArea').style.display = 'block';
+
+      if (!map){
+        map = L.map('map').setView([current.lat, current.lon], 18);
+        L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+          attribution: '&copy; OpenStreetMap'
+        }).addTo(map);
+        marker = L.marker([current.lat, current.lon], {draggable:true}).addTo(map);
+        circle = L.circle([current.lat, current.lon], {radius: current.acc, color:'#b08900', fillOpacity:.15}).addTo(map);
+        marker.on('dragend', () => {
+          const p = marker.getLatLng();
+          current.lat = p.lat; current.lon = p.lng;
+        });
+      } else {
+        map.setView([current.lat, current.lon], 18);
+        marker.setLatLng([current.lat, current.lon]);
+        circle.setLatLng([current.lat, current.lon]);
+        circle.setRadius(current.acc);
+      }
+      setTimeout(() => map.invalidateSize(), 200);
+    }, err => {
+      locBtn.disabled = false;
+      msgs.innerHTML = `<div class="error">Nepodařilo se zjistit polohu (${err.message}). Zkontroluj, že má prohlížeč povolení k poloze.</div>`;
+    }, {enableHighAccuracy:true, timeout:15000, maximumAge:0});
+  });
+
+  document.getElementById('genBtn').addEventListener('click', () => {
+    if (!current){ return; }
+    const p = marker.getLatLng();
+    const data = {
+      lat: Math.round(p.lat * 1e6) / 1e6,
+      lon: Math.round(p.lng * 1e6) / 1e6,
+      msg: document.getElementById('msgInput').value.trim(),
+      title: document.getElementById('titleInput').value.trim()
+    };
+    const b64 = b64EncodeUnicode(JSON.stringify(data));
+    const url = location.origin + location.pathname + '?t=' + encodeURIComponent(b64);
+    const resultArea = document.getElementById('resultArea');
+    resultArea.innerHTML = `
+      <div class="card">
+        <label>Odkaz pro hledače</label>
+        <div class="linkbox">
+          <input type="text" id="urlOut" readonly value="${url}">
+          <button id="copyBtn" class="iconbtn" title="Kopírovat">📋</button>
+        </div>
+        <div id="qrbox"></div>
+        <button id="testBtn" class="secondary" style="margin-top:14px">🧪 Vyzkoušet jako hledač</button>
+      </div>`;
+    new QRCode(document.getElementById('qrbox'), {text:url, width:200, height:200});
+    document.getElementById('testBtn').addEventListener('click', () => window.open(url, '_blank'));
+    document.getElementById('copyBtn').addEventListener('click', () => {
+      navigator.clipboard.writeText(url).then(() => {
+        const b = document.getElementById('copyBtn'); b.textContent = '✅';
+        setTimeout(() => b.textContent = '📋', 1200);
+      });
+    });
+    resultArea.scrollIntoView({behavior:'smooth'});
+  });
+}
+
+// ================= SEEKER (pro kamaráda) =================
+function renderSeeker(target){
+  const app = document.getElementById('app');
+  const title = target.title || 'Poklad';
+  app.innerHTML = `
+    <h1>🔍 ${escapeHtml(title)}</h1>
+    <p class="lead">Chytej signál a jdi za šipkou. Ať telefon míří rovně před sebe.</p>
+    <div class="card hunt" id="startCard">
+      <button id="startBtn">▶️ Začít hledat</button>
+      <div id="startMsgs"></div>
+    </div>
+  `;
+
+  document.getElementById('startBtn').addEventListener('click', async () => {
+    const startBtn = document.getElementById('startBtn');
+    const msgs = document.getElementById('startMsgs');
+    startBtn.disabled = true;
+    msgs.innerHTML = `<p class="note">Připravuji senzory…</p>`;
+
+    if (!('geolocation' in navigator)){
+      msgs.innerHTML = `<div class="error">Tento prohlížeč neumí zjistit polohu.</div>`;
+      startBtn.disabled = false;
+      return;
+    }
+
+    const compassOk = await requestSensorPermission();
+    ensureAudioContext();
+    requestWakeLock();
+    startTrackingUI(target, compassOk);
+    startCompass();
+    navigator.geolocation.watchPosition(
+      pos => onPosition(pos, target),
+      err => onGeoError(err),
+      {enableHighAccuracy:true, maximumAge:1000, timeout:20000}
+    );
+  });
+}
+
+function escapeHtml(s){
+  const d = document.createElement('div'); d.textContent = s; return d.innerHTML;
+}
+
+// ---- shared seeker state ----
+let currentHeading = null;
+let lastFix = null;         // {lat,lon,t}
+let lastRotation = 0;
+let latestDistance = null;
+let latestAccuracy = null;
+let beepTimer = null;
+let muted = false;
+let audioCtx = null;
+let wakeLockRef = null;
+let arrivedShown = false;
+
+function startTrackingUI(target, compassOk){
+  const app = document.getElementById('app');
+  app.innerHTML = `
+    <h1>🔍 ${escapeHtml(target.title || 'Poklad')}</h1>
+    <div class="card hunt" id="huntCard">
+      <div class="compass-wrap">
+        <div class="compass-ring"></div>
+        <div class="arrow" id="arrow">${arrowSvg}</div>
+      </div>
+      <div class="distance" id="distEl">– <span>m</span></div>
+      <div class="status-text" id="statusEl">Hledám signál…</div>
+      <div class="acc-text" id="accEl"></div>
+      <div class="controls">
+        <button id="muteBtn" class="iconbtn">🔊</button>
+        <button id="stopBtn" class="secondary">⏹️ Zastavit</button>
+      </div>
+    </div>
+    <div id="arrivedArea"></div>
+  `;
+  if (!compassOk){
+    document.getElementById('statusEl').insertAdjacentHTML('afterend',
+      `<p class="note">Kompas není povolen/dostupný – směr dopočítám podle tvého pohybu. Kousek popojdi.</p>`);
+  }
+  document.getElementById('muteBtn').addEventListener('click', () => {
+    muted = !muted;
+    document.getElementById('muteBtn').textContent = muted ? '🔇' : '🔊';
+  });
+  document.getElementById('stopBtn').addEventListener('click', stopHunt);
+}
+
+function stopHunt(){
+  clearTimeout(beepTimer);
+  if (wakeLockRef) wakeLockRef.release().catch(()=>{});
+  location.reload();
+}
+
+async function requestSensorPermission(){
+  if (typeof DeviceOrientationEvent !== 'undefined' && typeof DeviceOrientationEvent.requestPermission === 'function'){
+    try {
+      const resp = await DeviceOrientationEvent.requestPermission();
+      return resp === 'granted';
+    } catch(e){ return false; }
+  }
+  return true;
+}
+
+function startCompass(){
+  const handler = e => {
+    let heading;
+    if (typeof e.webkitCompassHeading === 'number' && !isNaN(e.webkitCompassHeading)){
+      heading = e.webkitCompassHeading;
+    } else if (e.alpha !== null){
+      heading = 360 - e.alpha;
+    } else return;
+    currentHeading = (heading + 360) % 360;
+  };
+  if ('ondeviceorientationabsolute' in window){
+    window.addEventListener('deviceorientationabsolute', handler, true);
+  } else {
+    window.addEventListener('deviceorientation', handler, true);
+  }
+}
+
+function ensureAudioContext(){
+  try {
+    audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+    if (audioCtx.state === 'suspended') audioCtx.resume();
+  } catch(e){ audioCtx = null; }
+}
+
+function beep(freq, duration, volume){
+  if (!audioCtx || muted) return;
+  const osc = audioCtx.createOscillator();
+  const gain = audioCtx.createGain();
+  osc.frequency.value = freq;
+  osc.type = 'sine';
+  gain.gain.value = volume;
+  osc.connect(gain); gain.connect(audioCtx.destination);
+  osc.start();
+  gain.gain.exponentialRampToValueAtTime(0.0001, audioCtx.currentTime + duration/1000);
+  osc.stop(audioCtx.currentTime + duration/1000 + 0.03);
+}
+
+function scheduleBeep(){
+  clearTimeout(beepTimer);
+  if (latestDistance == null) { beepTimer = setTimeout(scheduleBeep, 400); return; }
+  const arriveThreshold = Math.max(latestAccuracy || 8, 3);
+  if (latestDistance <= arriveThreshold){
+    beep(1900, 220, 0.16);
+    beepTimer = setTimeout(scheduleBeep, 260);
+    return;
+  }
+  const interval = Math.min(1400, Math.max(130, latestDistance * 8));
+  const freq = Math.min(1700, Math.max(500, 1700 - latestDistance * 5));
+  beep(freq, 110, 0.14);
+  beepTimer = setTimeout(scheduleBeep, interval);
+}
+
+function requestWakeLock(){
+  if ('wakeLock' in navigator){
+    navigator.wakeLock.request('screen').then(w => wakeLockRef = w).catch(()=>{});
+    document.addEventListener('visibilitychange', () => {
+      if (document.visibilityState === 'visible' && !wakeLockRef){
+        navigator.wakeLock.request('screen').then(w => wakeLockRef = w).catch(()=>{});
+      }
+    });
+  }
+}
+
+function statusForDistance(d){
+  if (d > 200) return {text:'Zima 🥶', color:'#6b6153'};
+  if (d > 60)  return {text:'Chladno', color:'#4a6fa5'};
+  if (d > 20)  return {text:'Vlažno', color:'#b08900'};
+  if (d > 8)   return {text:'Teplo 🔥', color:'#d17a1e'};
+  return {text:'Hoří!! 🔥🔥', color:'#a4342a'};
+}
+
+function onGeoError(err){
+  document.getElementById('statusEl').textContent = 'Chyba GPS: ' + err.message;
+}
+
+function onPosition(pos, target){
+  const {latitude:lat, longitude:lon, accuracy} = pos.coords;
+  const now = Date.now();
+
+  // fallback heading from movement, used only when compass unavailable
+  if (currentHeading === null){
+    if (typeof pos.coords.heading === 'number' && !isNaN(pos.coords.heading) && pos.coords.speed > 0.3){
+      currentHeading = pos.coords.heading;
+    } else if (lastFix && distanceMeters(lastFix.lat, lastFix.lon, lat, lon) > 4){
+      currentHeading = bearingDeg(lastFix.lat, lastFix.lon, lat, lon);
+    }
+  }
+  lastFix = {lat, lon, t: now};
+
+  const dist = distanceMeters(lat, lon, target.lat, target.lon);
+  const bearing = bearingDeg(lat, lon, target.lat, target.lon);
+  latestDistance = dist;
+  latestAccuracy = accuracy;
+
+  const distEl = document.getElementById('distEl');
+  const statusEl = document.getElementById('statusEl');
+  const accEl = document.getElementById('accEl');
+  if (!distEl) return; // UI not mounted (e.g. after stop)
+
+  distEl.innerHTML = dist < 1000
+    ? `${dist.toFixed(dist < 20 ? 1 : 0)} <span>m</span>`
+    : `${(dist/1000).toFixed(2)} <span>km</span>`;
+  accEl.textContent = `přesnost GPS ±${Math.round(accuracy)} m`;
+
+  const arriveThreshold = Math.max(accuracy || 8, 3);
+  if (dist <= arriveThreshold){
+    statusEl.textContent = 'JSI TADY! 🎉';
+    statusEl.style.color = 'var(--good)';
+    showArrived(target);
+  } else {
+    const s = statusForDistance(dist);
+    statusEl.textContent = s.text;
+    statusEl.style.color = s.color;
+  }
+
+  if (currentHeading !== null){
+    const angle = (bearing - currentHeading + 360) % 360;
+    setArrowRotation(angle);
+  }
+
+  if (!beepTimer) scheduleBeep();
+}
+
+function setArrowRotation(deg){
+  const diff = ((deg - lastRotation + 540) % 360) - 180;
+  lastRotation += diff;
+  const arrow = document.getElementById('arrow');
+  if (arrow) arrow.style.transform = `rotate(${lastRotation}deg)`;
+}
+
+function showArrived(target){
+  if (arrivedShown) return;
+  arrivedShown = true;
+  clearTimeout(beepTimer);
+  beep(2100, 150, 0.16);
+  setTimeout(() => beep(2100, 150, 0.16), 220);
+  setTimeout(() => beep(2500, 250, 0.16), 440);
+  if (navigator.vibrate) navigator.vibrate([120, 60, 120, 60, 250]);
+  const area = document.getElementById('arrivedArea');
+  const huntCard = document.getElementById('huntCard');
+  if (huntCard) huntCard.classList.add('arrived');
+  if (area && target.msg){
+    area.innerHTML = `<div class="card arrived"><div class="msg">💌 ${escapeHtml(target.msg)}</div></div>`;
+  }
+}
+</script>
+</body>
+</html>
