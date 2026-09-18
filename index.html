@@ -54,7 +54,7 @@
   .hunt{flex:1; display:flex; flex-direction:column; align-items:center; justify-content:center; text-align:center;}
   .compass-wrap{position:relative; width:230px; height:230px; margin:10px auto 4px;}
   .compass-ring{position:absolute; inset:0; border-radius:50%; background:radial-gradient(circle at 50% 45%, #fff, #eee0c0); box-shadow:inset 0 0 0 6px #fff, 0 4px 16px rgba(0,0,0,.12);}
-  .arrow{position:absolute; inset:0; transition:transform .18s ease-out; will-change:transform;}
+  .arrow{position:absolute; inset:0; transition:transform .1s linear; will-change:transform;}
   .arrow svg{width:100%; height:100%;}
   .distance{font-size:2.6rem; font-weight:800; margin:6px 0 0;}
   .distance span{font-size:1.1rem; font-weight:600; color:var(--muted);}
@@ -89,11 +89,24 @@ function bearingDeg(lat1, lon1, lat2, lon2){
   const x = Math.cos(toRad(lat1))*Math.sin(toRad(lat2)) - Math.sin(toRad(lat1))*Math.cos(toRad(lat2))*Math.cos(toRad(lon2-lon1));
   return (toDeg(Math.atan2(y, x)) + 360) % 360;
 }
-function b64EncodeUnicode(str){
-  return btoa(encodeURIComponent(str).replace(/%([0-9A-F]{2})/g, (_, p1) => String.fromCharCode('0x' + p1)));
+// Schválně jednoduchá XOR "šifra" s klíčem přímo tady v kódu - nejde o
+// skutečné zabezpečení (kdokoliv se zdrojákem si klíč najde), jen aby
+// odkaz nešel rozlousknout vložením do běžné base64 dekodérky.
+const TREASURE_KEY = 'poklad-je-schovany-2026';
+
+function encodeTreasure(data){
+  const bytes = new TextEncoder().encode(JSON.stringify(data));
+  let binary = '';
+  bytes.forEach((b, i) => binary += String.fromCharCode(b ^ TREASURE_KEY.charCodeAt(i % TREASURE_KEY.length)));
+  return btoa(binary);
 }
-function b64DecodeUnicode(str){
-  return decodeURIComponent(atob(str).split('').map(c => '%' + ('00' + c.charCodeAt(0).toString(16)).slice(-2)).join(''));
+function decodeTreasure(b64){
+  const binary = atob(b64);
+  const bytes = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i++){
+    bytes[i] = binary.charCodeAt(i) ^ TREASURE_KEY.charCodeAt(i % TREASURE_KEY.length);
+  }
+  return JSON.parse(new TextDecoder().decode(bytes));
 }
 
 const arrowSvg = `<svg viewBox="0 0 100 100"><polygon points="50,10 68,58 50,46 32,58" fill="#a4342a"/><polygon points="50,46 68,58 50,92 32,58" fill="#1b4332"/><circle cx="50" cy="50" r="45" fill="none" stroke="#ddd3ba" stroke-width="2"/></svg>`;
@@ -102,7 +115,7 @@ const arrowSvg = `<svg viewBox="0 0 100 100"><polygon points="50,10 68,58 50,46 
 const params = new URLSearchParams(location.search);
 const t = params.get('t');
 if (t) {
-  try { renderSeeker(JSON.parse(b64DecodeUnicode(t))); }
+  try { renderSeeker(decodeTreasure(t)); }
   catch(e){ renderBadLink(); }
 } else {
   renderSetter();
@@ -187,7 +200,7 @@ function renderSetter(){
       msg: document.getElementById('msgInput').value.trim(),
       title: document.getElementById('titleInput').value.trim()
     };
-    const b64 = b64EncodeUnicode(JSON.stringify(data));
+    const b64 = encodeTreasure(data);
     const url = location.origin + location.pathname + '?t=' + encodeURIComponent(b64);
     const resultArea = document.getElementById('resultArea');
     resultArea.innerHTML = `
@@ -237,8 +250,9 @@ function renderSeeker(target){
       return;
     }
 
+    ensureAudioContext(); // musí běžet synchronně hned v handleru kliknutí,
+    // jinak prohlížeč (hlavně Safari/iOS) po "await" už gesto neuzná a zvuk se neuvolní
     const compassOk = await requestSensorPermission();
-    ensureAudioContext();
     requestWakeLock();
     startTrackingUI(target, compassOk);
     startCompass();
@@ -321,12 +335,20 @@ function startCompass(){
       heading = 360 - e.alpha;
     } else return;
     currentHeading = (heading + 360) % 360;
+    updateArrow(); // otočit šipku hned při každém pohybu telefonu, nečekat na další GPS fix
   };
   if ('ondeviceorientationabsolute' in window){
     window.addEventListener('deviceorientationabsolute', handler, true);
   } else {
     window.addEventListener('deviceorientation', handler, true);
   }
+}
+
+let latestBearing = null;
+function updateArrow(){
+  if (latestBearing === null || currentHeading === null) return;
+  const angle = (latestBearing - currentHeading + 360) % 360;
+  setArrowRotation(angle);
 }
 
 function ensureAudioContext(){
@@ -338,6 +360,7 @@ function ensureAudioContext(){
 
 function beep(freq, duration, volume){
   if (!audioCtx || muted) return;
+  if (audioCtx.state === 'suspended') audioCtx.resume();
   const osc = audioCtx.createOscillator();
   const gain = audioCtx.createGain();
   osc.frequency.value = freq;
@@ -354,13 +377,13 @@ function scheduleBeep(){
   if (latestDistance == null) { beepTimer = setTimeout(scheduleBeep, 400); return; }
   const arriveThreshold = Math.max(latestAccuracy || 8, 3);
   if (latestDistance <= arriveThreshold){
-    beep(1900, 220, 0.16);
+    beep(1900, 220, 0.28);
     beepTimer = setTimeout(scheduleBeep, 260);
     return;
   }
   const interval = Math.min(1400, Math.max(130, latestDistance * 8));
   const freq = Math.min(1700, Math.max(500, 1700 - latestDistance * 5));
-  beep(freq, 110, 0.14);
+  beep(freq, 150, 0.25);
   beepTimer = setTimeout(scheduleBeep, interval);
 }
 
@@ -402,7 +425,7 @@ function onPosition(pos, target){
   lastFix = {lat, lon, t: now};
 
   const dist = distanceMeters(lat, lon, target.lat, target.lon);
-  const bearing = bearingDeg(lat, lon, target.lat, target.lon);
+  latestBearing = bearingDeg(lat, lon, target.lat, target.lon);
   latestDistance = dist;
   latestAccuracy = accuracy;
 
@@ -427,10 +450,7 @@ function onPosition(pos, target){
     statusEl.style.color = s.color;
   }
 
-  if (currentHeading !== null){
-    const angle = (bearing - currentHeading + 360) % 360;
-    setArrowRotation(angle);
-  }
+  updateArrow();
 
   if (!beepTimer) scheduleBeep();
 }
@@ -446,9 +466,9 @@ function showArrived(target){
   if (arrivedShown) return;
   arrivedShown = true;
   clearTimeout(beepTimer);
-  beep(2100, 150, 0.16);
-  setTimeout(() => beep(2100, 150, 0.16), 220);
-  setTimeout(() => beep(2500, 250, 0.16), 440);
+  beep(2100, 150, 0.28);
+  setTimeout(() => beep(2100, 150, 0.28), 220);
+  setTimeout(() => beep(2500, 250, 0.28), 440);
   if (navigator.vibrate) navigator.vibrate([120, 60, 120, 60, 250]);
   const area = document.getElementById('arrivedArea');
   const huntCard = document.getElementById('huntCard');
