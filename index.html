@@ -102,11 +102,13 @@ const TREASURE_KEY = 'poklad-je-schovany-2026';
 // Namluvené hlášky - stačí přidat soubory (.m4a/.mp3) do složky voices/
 // a jejich cestu sem do pole. Prázdné pole = funkce se nezapne, nic se nerozbije.
 const VOICE_GENERAL = [
-  // 'voices/pohni.m4a',
-  // 'voices/hledej.m4a',
+  'voices/delej.m4a',
+  'voices/hledej-smudlo.m4a',
+  'voices/jsi-pomaly.m4a',
+  'voices/pohni.m4a',
 ];
 const VOICE_ARRIVED = [
-  // 'voices/nasels.m4a',
+  'voices/mega-dobry.m4a',
 ];
 
 function encodeTreasure(data){
@@ -325,6 +327,7 @@ function startTrackingUI(target, compassOk){
   document.getElementById('muteBtn').addEventListener('click', () => {
     muted = !muted;
     document.getElementById('muteBtn').textContent = muted ? '🔇' : '🔊';
+    if (muted && voiceEl) voiceEl.pause();
   });
   document.getElementById('stopBtn').addEventListener('click', stopHunt);
 }
@@ -433,9 +436,10 @@ function primeVoiceAudio(){
   }).catch(() => {});
 }
 
-function playRandomVoice(list){
+function playRandomVoice(list, loop = false){
   if (!list.length || muted || !voiceEl) return;
   voiceEl.pause();
+  voiceEl.loop = loop;
   voiceEl.src = list[Math.floor(Math.random() * list.length)];
   voiceEl.currentTime = 0;
   voiceEl.play().catch(() => {});
@@ -531,7 +535,7 @@ function showArrived(target){
   arrivedShown = true;
   clearTimeout(beepTimer);
   clearTimeout(voiceTimer);
-  playRandomVoice(VOICE_ARRIVED);
+  playRandomVoice(VOICE_ARRIVED, true);
   beep(2100, 150, 0.28);
   setTimeout(() => beep(2100, 150, 0.28), 220);
   setTimeout(() => beep(2500, 250, 0.28), 440);
